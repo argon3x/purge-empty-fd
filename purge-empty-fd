@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# colors
+GRN="\e[01;32m"
+RD="\e[01;31m"
+BLU="\e[01;34m"
+YLW="\e[01;33m"
+END="\e[00m"
+
+CBOX="${BLU}[*]${END}"
+FBOX="${RD}[-]${END}"
+
+VERSION='1.0.1'
+
+# signal to cancel
+ctrl_c(){
+  echo -e "\n$RD canceled processed $END\n"
+  exit 1
+}
+
+# error control
+state(){
+  local string=$1
+  local input=$2
+
+  if [[ $string != msg ]]; then
+    if [[ $input -eq 0 ]]; then
+      echo -e "$GRN OK $END"
+    else
+      echo -e "$RD FAILED $END"
+      exit 1
+    fi
+  else
+    echo -e "\n${RD}[ERROR]${END}: $input\n"
+    exit 1
+  fi
+}
+trap ctrl_c SIGINT
+trap state SIGTERM
+
+# show the help menu
+help_menu(){
+cat << EOF
+use: ${0##*/} [-h] [-E] -P -f -d -a
+
+description: Purges all empty files or directories, you can also exclude some
+             files or directories
+
+options:
+  -h        show the help menu.
+  -P        directory path.
+  -E        exclude files or directories, using ":" as delimiter (abc:def:ghi)
+  -f        purge all empty files.
+  -d        purge all empty directories.  
+  -a        purge all empty files and directories.
+  -v        script version.
+EOF
+exit 0
+}
+
+# purge all empty directories
+purge_directories(){
+  local code=1
+  local directory_path=$1
+  local exclude=$2
+  
+  if [[ -z $exclude ]]; then
+    while [[ $code -ne 0 && $(ls $directory_path | wc -l) -ne 0 ]]; do
+      (find $directory_path -type d -empty -exec rmdir {} \; 2>/dev/null)
+      code=$?
+    done
+  else
+    while [[ $code -ne 0 && $(ls $directory_path | wc -l) -ne 0 ]]; do
+      (find $directory_path \( $exclude \) -prune -o -type d -empty -exec rmdir {} \; 2>/dev/null)
+      code=$?
+    done
+  fi
+  state "" $?
+}
+
+# purge all empty files
+purge_files(){
+  local directory_path=$1
+  local exclude=$2
+
+  if [[ -z $exclude ]]; then
+    (find $directory_path -type f -empty -exec rm -f {} \; 2>/dev/null)
+    state "" $?
+  else
+    (find $directory_path \( $exclude \) -prune -o -type f -empty -exec rm -f {} \; 2>/dev/null)
+    state "" $?
+  fi
+}
+
+# processes the data that was entered
+process_input(){
+  local directory_path="$1"
+  local excluded="$2"
+  local type="$3"
+
+  # remove last character if '/'
+  [[ ${directory_path: -1} == '/' ]] && directory_path=${directory_path%?}
+
+  # check that the directory exists and contains files
+  echo -e "${CBOX} checking directory contents..."; sleep 0.4
+  if ! [[ -d $directory_path && $(find $directory_path/* 2>/dev/null | wc -l ) -ne 0 ]]; then
+    state "msg" "The directory does not exist or is empty"
+  fi
+
+  # parsers excluded files or directories
+  if [[ -n $excluded ]]; then
+    local i=1
+    IFS=':' read -r -a parsing <<< $(echo $excluded)
+    
+    if [[ ${#parsing[@]} -ne 1 ]]; then
+      for parser in "${parsing[@]}"; do
+        if [[ $i -lt ${#parsing[@]} ]]; then
+          exclude+="-name ${parser} -o "
+        else
+          exclude+="-name ${parser} "
+        fi
+        i=$(( i + 1))
+      done
+    else
+      exclude="-name $parsing"
+    fi
+  fi
+
+  if [[ $type == files ]]; then
+    echo -e "${CBOX} purging files... \c"; sleep 0.4
+    purge_files "$directory_path" "${exclude}"
+  elif [[ $type == directories ]]; then
+    echo -e "${CBOX} purging directories... \c"; sleep 0.4
+    purge_directories "$directory_path" "${exclude}"
+  elif [[ $type == all ]]; then
+    echo -e "${CBOX} purging files... \c"; sleep 0.4
+    purge_files "$directory_path" "${exclude}"
+    echo -e "${CBOX} purging directories... \c"; sleep 0.4
+    purge_directories "$directory_path" "${exclude}"
+  fi
+}
+
+# check that the script receives parameters and to process them
+if [[ $# -ne 0 ]]; then
+  while getopts "P:E:f,d,a,v,h" args 2>/dev/null; do
+    case $args in
+      \?) state "msg" "invalid option, use -h"
+        ;;
+      #:) state "msg" "option needs one argument, use -h"
+      #  ;;
+      v) echo -e "${GRN}${0##*/}${END} $VERSION"; exit 0
+        ;;
+      h) help_menu
+        ;;
+      P) DIRECTORY_PATH=$OPTARG
+        ;;
+      E) EXCLUDED=$OPTARG
+        ;;
+      f) TYPE='files' 
+        ;;
+      d) TYPE='directories'
+        ;;
+      a) TYPE='all'
+        ;;
+    esac
+  done
+  [[ -z $TYPE ]] && state "msg" "use [-f] [-d] [-a] to purge"
+  [[ $OPTIND -eq 2 ]] && shift $(( OPTIND - 1 ))
+
+  process_input "$DIRECTORY_PATH" "$EXCLUDED" "$TYPE"
+else
+  help_menu
+fi
